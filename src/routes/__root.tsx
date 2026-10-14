@@ -13,7 +13,7 @@ export const Route = createRootRoute({
       { title: APP_NAME },
       {
         name: "description",
-        content: "Export Google Keep notes to Evernote (.enex), Markdown, JSON, CSV, or text. Nothing is uploaded.",
+        content: "Export Google Keep notes to Evernote (.enex), Markdown, JSON, CSV, or text. Opens each note so cut-off text is included.",
       },
       { name: "theme-color", content: "#f3f1ec" },
     ],

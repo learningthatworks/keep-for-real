@@ -123,9 +123,14 @@ export function KeepApp() {
     try {
       await navigator.clipboard.writeText(bookmark);
       setCopied(true);
+      setWarnings((current) => current.filter((warning) => !warning.startsWith("Clipboard is blocked")));
     } catch {
       setCopied(false);
-      setWarnings(["Clipboard is blocked. Drag Keep for Real onto the bookmarks bar instead."]);
+      setWarnings([
+        window.matchMedia("(hover: hover)").matches
+          ? "Clipboard is blocked. Drag Keep for Real onto the bookmarks bar instead."
+          : "Clipboard is blocked. Press and hold the address below, then copy it.",
+      ]);
     }
   }
 
@@ -149,15 +154,45 @@ export function KeepApp() {
       <header className="max-w-3xl">
         <h1 className="text-4xl font-medium tracking-tight text-ink sm:text-5xl">Keep for Real</h1>
         <p className="mt-4 max-w-2xl text-lg text-muted">
-          Export Google Keep notes to Evernote (.enex), Markdown, JSON, CSV, and text. The bookmark reads the notes
-          already open in your browser. Nothing is uploaded.
+          Save your Google Keep notes as a file. Evernote, Markdown, JSON, CSV, or plain text. Nothing is uploaded.
         </p>
       </header>
 
       <section className="mt-8 rounded-3xl bg-card p-4 shadow-border sm:p-6">
-        <h2 className="text-2xl font-medium">From the Keep page</h2>
+        <h2 className="text-2xl font-medium">Pick one way</h2>
+        <p className="mt-2 max-w-2xl text-muted">You only need to do one of these. The first two make a bookmark. A bookmark is a saved link in your browser.</p>
+        <ul className="mt-4 grid gap-3 sm:grid-cols-2">
+          <li className="rounded-2xl bg-paper p-4">
+            <p className="font-medium">Computer: drag the button</p>
+            <p className="mt-1 text-sm text-muted">
+              Best if you are on a laptop or desktop. Drag Keep for Real onto the bookmarks bar, open Google Keep, and click it. It opens every note so text cut off on the card is saved. Pictures are not.
+            </p>
+          </li>
+          <li className="rounded-2xl bg-paper p-4">
+            <p className="font-medium">Phone, or drag will not work: copy the address</p>
+            <p className="mt-1 text-sm text-muted">
+              Same bookmark. Copy the address, save any bookmark, then paste that address into it. Use this when you cannot drag.
+            </p>
+          </li>
+          <li className="rounded-2xl bg-paper p-4">
+            <p className="font-medium">A few notes: paste them</p>
+            <p className="mt-1 text-sm text-muted">
+              Open a note in Keep, copy the words, and paste them below. This is also what works in Chrome on an Android phone.
+            </p>
+          </li>
+          <li className="rounded-2xl bg-paper p-4">
+            <p className="font-medium">Photos or recordings: Takeout zip</p>
+            <p className="mt-1 text-sm text-muted">
+              Google emails you a zip file. It is the slow way, and the only way to keep pictures, drawings, and voice recordings.
+            </p>
+          </li>
+        </ul>
+      </section>
+
+      <section className="mt-4 rounded-3xl bg-card p-4 shadow-border sm:p-6">
+        <h2 className="text-2xl font-medium">On a computer, drag the button</h2>
         <p className="mt-2 max-w-2xl text-muted">
-          This is the quick way. The bookmark reads the notes already open in your browser, scrolls the list, and downloads a file there.
+          The bookmarks bar is the row of links under the address field. If you do not see it, press Ctrl+Shift+B. On a Mac, press Command+Shift+B. In Safari, use the View menu and choose Show Favorites Bar.
         </p>
         <div className="mt-4 flex flex-wrap gap-2" role="group" aria-label="Bookmark format">
           {LIVE.map((item) => {
@@ -182,6 +217,9 @@ export function KeepApp() {
             );
           })}
         </div>
+        <p className="mt-2 text-sm text-muted">
+          Choose Evernote unless you already know you want Markdown, JSON, CSV, or text. You can download the other kinds later from this page.
+        </p>
         <ol className="mt-5 grid gap-4 sm:grid-cols-3">
           <li className="rounded-2xl bg-paper p-4">
             <p className="text-sm font-medium text-muted">1</p>
@@ -194,28 +232,53 @@ export function KeepApp() {
             >
               Keep for Real
             </a>
+            <p className="mt-2 text-sm text-muted">Press and hold the button, then drop it on the bar. Do not click it on this page.</p>
           </li>
           <li className="rounded-2xl bg-paper p-4">
             <p className="text-sm font-medium text-muted">2</p>
             <p className="mt-2 font-medium">Open Google Keep</p>
-            <p className="mt-1 text-sm text-muted">Signed in on the notes list. Archive is a separate pass.</p>
+            <p className="mt-1 text-sm text-muted">
+              Go to keep.google.com and sign in. Stay on the list of notes. Do not open a single note first.
+            </p>
           </li>
           <li className="rounded-2xl bg-paper p-4">
             <p className="text-sm font-medium text-muted">3</p>
             <p className="mt-2 font-medium">Click the bookmark</p>
-            <p className="mt-1 text-sm text-muted">It scrolls, then downloads. Photos stay in Keep.</p>
+            <p className="mt-1 text-sm text-muted">
+              Leave that tab alone until a file downloads. It opens each note to get the full text. For archived notes, open Archive in Keep and click the bookmark again. Photos stay in Keep.
+            </p>
           </li>
         </ol>
         <button type="button" onClick={() => void copyBookmark()} className="mt-4 h-11 text-sm font-medium text-accent">
           {copied ? "Bookmark copied" : "Copy bookmark address"}
         </button>
+        <div className="mt-4 max-w-2xl text-sm text-muted">
+          <p className="font-medium text-ink">Cannot drag? Use the button above, then:</p>
+          <ol className="mt-2 list-decimal space-y-2 pl-5">
+            <li>Bookmark this page. On a computer, click the star in the address bar. On a phone, tap Share, then Add Bookmark.</li>
+            <li>Open your bookmarks and edit the one you just saved. Name it Keep for Real if you want.</li>
+            <li>Delete the address and paste. It must start with javascript: including the colon. If those letters were cut off, type them at the start.</li>
+            <li>Open keep.google.com, stay on the notes list, and tap the bookmark. Leave the tab alone until the file downloads.</li>
+          </ol>
+          <p className="mt-2">Safari on iPhone can run this. Chrome on Android cannot. Paste the notes, or use a Takeout zip, instead.</p>
+        </div>
+        {warnings.some((warning) => warning.startsWith("Clipboard is blocked")) ? (
+          <textarea
+            readOnly
+            value={bookmark}
+            rows={4}
+            onFocus={(event) => event.currentTarget.select()}
+            aria-label="Bookmark address"
+            className="mt-3 w-full rounded-lg border border-line bg-paper px-3 py-3 text-sm text-ink"
+          />
+        ) : null}
       </section>
 
       <div className="mt-4 grid gap-4 lg:grid-cols-2">
         <section className="rounded-3xl bg-card p-4 shadow-border sm:p-6">
           <h2 className="text-2xl font-medium">Paste a few notes</h2>
           <p className="mt-2 text-sm text-muted">
-            First line is the title. Put a line that is only --- between notes. Checklists can be - [ ] and - [x].
+            Use this for a handful of notes, or when the bookmark cannot run. In Keep, open a note, select the words, and copy them. Paste here. The first line becomes the title. Between notes, put a line that is only ---. For a checklist, write - [ ] for not done and - [x] for done.
           </p>
           <textarea
             value={paste}
@@ -241,9 +304,9 @@ export function KeepApp() {
         </section>
 
         <section className="flex flex-col rounded-3xl bg-card p-4 shadow-border sm:p-6">
-          <h2 className="text-2xl font-medium">Try the download</h2>
+          <h2 className="text-2xl font-medium">Try an example first</h2>
           <p className="mt-2 text-sm text-muted">
-            Sample research notes, so you can see an Evernote file before touching your account.
+            These are not your notes. Load them if you want to see the download buttons before you touch your account.
           </p>
           <button
             type="button"
@@ -253,9 +316,9 @@ export function KeepApp() {
             Load sample notes
           </button>
           <details className="mt-6">
-            <summary className="cursor-pointer text-sm font-medium text-ink">Need photos too? Use a Takeout zip</summary>
+            <summary className="cursor-pointer text-sm font-medium text-ink">Need the photos? Use a Takeout zip</summary>
             <p className="mt-2 text-sm text-muted">
-              Google’s full copy, including images and recordings, still comes from Takeout. Export only your notes, then drop the zip here. HTML and JSON from that folder work as well.
+              The bookmark saves words only. For pictures, drawings, and recordings: open takeout.google.com, sign in, turn everything off except Google Keep, and create the export. Google emails you when the zip is ready. Drop that zip here, or the HTML and JSON files inside it.
             </p>
             <div
               onDragOver={(event) => {
