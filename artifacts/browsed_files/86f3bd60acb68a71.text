@@ -1,0 +1,353 @@
+// ==UserScript==
+// @name         Google Keep - One-click Trash
+// @namespace    https://keep.google.com
+// @version      2.0.0
+// @description  Turns Google Keep's Archive button into a one-click Trash button, on note cards, inside an opened note, and in the multi-select bar. No more More (...) > Delete note.
+// @author       Afraaz Ali
+// @license      MIT
+// @homepageURL  https://greasyfork.org/en/scripts/598346-google-keep-one-click-trash
+// @supportURL   https://greasyfork.org/en/scripts/598346-google-keep-one-click-trash/feedback
+// @match        https://keep.google.com/*
+// @icon         https://keep.google.com/favicon.ico
+// @grant        none
+// @run-at       document-idle
+// ==/UserScript==
+
+// ---------------------------------------------------------------------------
+// INSTALL / UPDATE (open this to get the newest version):
+//   https://greasyfork.org/en/scripts/598346-google-keep-one-click-trash
+//
+// SOURCE (GitHub gist):
+//   https://gist.github.com/afraazali42/438a48b6757e5ca519509047212f488c
+// ---------------------------------------------------------------------------
+
+/*
+ * v2 - rewritten. v1 INSERTED its own button into Keep's toolbar, and that was
+ * the wrong idea. Keep rebuilds that toolbar constantly, on practically every
+ * keystroke, and each rebuild re-appended Keep's own buttons AFTER the foreign
+ * node. The button visibly jumped and got shoved back, handlers ended up
+ * holding a stale toolbar whose "More" measured 0x0, and clicks intermittently
+ * did nothing so you had to click twice. Five releases chased those symptoms.
+ *
+ * v2 adds no element at all. It takes over Keep's OWN Archive button: swaps the
+ * icon with CSS and intercepts the click at the document level. Nothing foreign
+ * is in the toolbar, so there is nothing to shuffle, nothing to re-seat, and no
+ * stale reference. It is also pixel-correct everywhere for free, because it IS
+ * Keep's button - right size, position, hover and theme in the note grid, the
+ * opened note, and the multi-select bar alike.
+ */
+
+(function () {
+  'use strict';
+
+  var HOST = 'data-kt-host';        // marks a toolbar we have taken over
+  var ICO  = 'data-kt-ico';         // which generated icon rule that toolbar uses
+  var DONE = 'data-kt-hijacked';    // marks an Archive button we have relabelled
+
+  // "Delete note" for one note, "Delete notes" when several are selected.
+  // Matched EXACTLY, and exactly one hit is required. The same menu also holds
+  // "Delete checked items", so a loose match would destroy the wrong thing.
+  // If your Keep is in another language, add its wording here. If nothing
+  // matches, the script closes the menu and does nothing rather than guess.
+  var DELETE_LABELS = ['Delete note', 'Delete notes'];
+
+  var MENU_WAIT_MS = 2000;
+  var POLL_MS = 50;
+  var BUSY_MS = 8000;
+  var SWEEP_MS = 150;
+
+  var busy = false, busyTimer = null;
+
+  // Keep's own Archive selector, plus ours for buttons already relabelled.
+  var ARCHIVE_SEL = '[aria-label="Archive"], [' + DONE + ']';
+
+  var TRASH_PATH = 'M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM8 9h8v10H8V9zm7.5-5l-1-1h-5l-1 1H5v2h14V4h-3.5z';
+
+  function trashURI(colour) {
+    var svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="' + colour + '">' +
+              '<path d="' + TRASH_PATH + '"/></svg>';
+    return 'url("data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg) + '")';
+  }
+
+  var style = document.createElement('style');
+  (document.head || document.documentElement).appendChild(style);
+
+  // -------------------------------------------------------------------------
+  // Icon rules.
+  //
+  // Keep's icons are SVG background-images with the colour baked in, and the
+  // colour differs by context: white 18px on note cards, accent blue 24px in
+  // the multi-select bar. Their `color` property is a red herring (it computes
+  // to near-black on the dark theme) and the SVGs carry no readable fill, so
+  // the only reliable way to match is to render a neighbouring icon to a canvas
+  // and read the pixels. Sampled once per distinct size and cached.
+  // -------------------------------------------------------------------------
+  var ruleFor = {};     // "colour|size" -> token
+  var sampled = {};     // backgroundSize -> colour (or 'pending')
+  var ruleCount = 0;
+
+  function tokenFor(colour, size) {
+    var key = colour + '|' + size;
+    if (ruleFor[key]) return ruleFor[key];
+    var token = 'k' + (++ruleCount);
+    ruleFor[key] = token;
+    style.textContent +=
+      '\n[' + ICO + '="' + token + '"] > :is([aria-label="Archive"],[' + DONE + ']) {' +
+      ' background-image: ' + trashURI(colour) + ' !important;' +
+      ' background-size: ' + size + ' !important; }';
+    return token;
+  }
+
+  function sampleIcon(el, cb) {
+    var bg = String(getComputedStyle(el).backgroundImage || '');
+    var m = bg.match(/url\(["']?(data:image\/svg\+xml[^"')]+)["']?\)/i);
+    if (!m) return cb(null);
+    var img = new Image();
+    img.onload = function () {
+      try {
+        var c = document.createElement('canvas');
+        c.width = c.height = 24;
+        var x = c.getContext('2d');
+        x.drawImage(img, 0, 0, 24, 24);
+        var d = x.getImageData(0, 0, 24, 24).data, counts = {}, best = null, bestN = 0;
+        for (var i = 0; i < d.length; i += 4) {
+          if (d[i + 3] < 200) continue;
+          var k = d[i] + ',' + d[i + 1] + ',' + d[i + 2];
+          counts[k] = (counts[k] || 0) + 1;
+          if (counts[k] > bestN) { bestN = counts[k]; best = k; }
+        }
+        cb(best ? 'rgb(' + best + ')' : null);
+      } catch (e) { cb(null); }
+    };
+    img.onerror = function () { cb(null); };
+    img.src = m[1];
+  }
+
+  // Fallback until a sample lands: contrast against the page background.
+  function themeInk() {
+    var n = document.body, bg = null;
+    while (n && n !== document.documentElement) {
+      var c = getComputedStyle(n).backgroundColor;
+      if (c && c.indexOf('rgba(0, 0, 0, 0)') === -1 && c !== 'transparent') { bg = c; break; }
+      n = n.parentElement;
+    }
+    var m = (bg || '').match(/\d+/g);
+    var lum = m && m.length >= 3 ? (0.299 * +m[0] + 0.587 * +m[1] + 0.114 * +m[2]) / 255 : 1;
+    return lum < 0.5 ? 'rgb(255,255,255)' : 'rgb(32,33,36)';
+  }
+
+  function applyIcon(bar) {
+    // Sample a NEIGHBOUR, never Archive itself - we overwrite Archive's icon,
+    // so reading it back would just return our own trash can.
+    var ref = bar.querySelector('[aria-label="More"]');
+    if (!ref) return;
+    var size = getComputedStyle(ref).backgroundSize || '18px 18px';
+
+    var colour = sampled[size];
+    if (colour === 'pending') {
+      if (!bar.getAttribute(ICO)) bar.setAttribute(ICO, tokenFor(themeInk(), size));
+      return;
+    }
+    if (!colour) {
+      sampled[size] = 'pending';
+      bar.setAttribute(ICO, tokenFor(themeInk(), size));   // provisional, no blank icon
+      sampleIcon(ref, function (found) {
+        sampled[size] = found || themeInk();
+        schedule();                                        // re-apply with the real colour
+      });
+      return;
+    }
+
+    var want = tokenFor(colour, size);
+    if (bar.getAttribute(ICO) !== want) bar.setAttribute(ICO, want);
+  }
+
+  // -------------------------------------------------------------------------
+  // Delete flow
+  // -------------------------------------------------------------------------
+  function openMenus() {
+    var out = [], all = document.querySelectorAll('[role="menu"]');
+    for (var i = 0; i < all.length; i++) {
+      var r = all[i].getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) out.push(all[i]);
+    }
+    return out;
+  }
+
+  // Escape must go to the open menu element. On document.body it does nothing
+  // and strands the menu open.
+  function closeAnyMenu() {
+    var init = { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true };
+    var m = openMenus();
+    (m.length ? m[m.length - 1] : document.body).dispatchEvent(new KeyboardEvent('keydown', init));
+  }
+
+  // element.click() is ignored by Keep's jsaction delegation. Only a full
+  // pointer sequence with real coordinates drives it.
+  function realPress(el) {
+    var r = el.getBoundingClientRect();
+    if (!r.width || !r.height) return false;
+    var x = r.left + r.width / 2, y = r.top + r.height / 2;
+    function base(buttons) {
+      return { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y,
+               screenX: x, screenY: y, button: 0, buttons: buttons, view: window };
+    }
+    function ptr(type, buttons) {
+      var i = base(buttons);
+      i.pointerId = 1; i.isPrimary = true; i.pointerType = 'mouse';
+      return new PointerEvent(type, i);
+    }
+    try {
+      if (window.PointerEvent) el.dispatchEvent(ptr('pointerdown', 1));
+      el.dispatchEvent(new MouseEvent('mousedown', base(1)));
+      if (window.PointerEvent) el.dispatchEvent(ptr('pointerup', 0));
+      el.dispatchEvent(new MouseEvent('mouseup', base(0)));
+      el.dispatchEvent(new MouseEvent('click', base(0)));
+      return true;
+    } catch (e) { return false; }
+  }
+
+  function release() { busy = false; if (busyTimer) { clearTimeout(busyTimer); busyTimer = null; } }
+  function giveUp(msg) {
+    closeAnyMenu();
+    console.warn('[Keep one-click trash] ' + msg + ', nothing was deleted.');
+    release();
+  }
+
+  function waitForMenu(deadline, cb) {
+    var m = openMenus();
+    if (m.length) return cb(m[m.length - 1]);
+    if (Date.now() > deadline) return cb(null);
+    setTimeout(function () { waitForMenu(deadline, cb); }, POLL_MS);
+  }
+
+  function findDeleteItems(menu) {
+    var items = menu.querySelectorAll('[role="menuitem"]'), hits = [];
+    for (var i = 0; i < items.length; i++) {
+      var t = (items[i].textContent || '').replace(/\s+/g, ' ').trim();
+      if (!t) continue;                                    // never match empty text
+      if (items[i].getAttribute('aria-disabled') === 'true') continue;
+      if (DELETE_LABELS.indexOf(t) !== -1) hits.push(items[i]);
+    }
+    return hits;
+  }
+
+  function pressMoreThenDelete(bar, attempt) {
+    if (!document.contains(bar)) return giveUp('the note went away mid-flow');
+    var more = bar.querySelector('[aria-label="More"]');
+    if (!more) return giveUp('the More button vanished');
+    if (!realPress(more)) return giveUp('could not press More (zero-size element)');
+
+    var first = attempt === 0;
+    waitForMenu(Date.now() + (first ? 900 : MENU_WAIT_MS), function (menu) {
+      if (!menu) {
+        if (first && document.contains(bar) && !openMenus().length) return pressMoreThenDelete(bar, 1);
+        return giveUp('the More menu never opened');
+      }
+      if (!document.contains(menu)) return giveUp('the menu went away mid-flow');
+
+      var hits = findDeleteItems(menu);
+      if (hits.length !== 1) {
+        return giveUp(hits.length === 0
+          ? 'no menu item exactly matched ' + JSON.stringify(DELETE_LABELS) +
+            ' (if Keep is not in English, add your wording to DELETE_LABELS)'
+          : hits.length + ' menu items matched, refusing to guess');
+      }
+      if (!realPress(hits[0])) return giveUp('could not press the delete item');
+      release();
+    });
+  }
+
+  function startDelete(bar) {
+    if (busy) return;
+    if (openMenus().length) {
+      console.warn('[Keep one-click trash] a menu was already open, ignoring this click.');
+      return;
+    }
+    busy = true;
+    busyTimer = setTimeout(release, BUSY_MS);
+    pressMoreThenDelete(bar, 0);
+  }
+
+  // -------------------------------------------------------------------------
+  // Interception, at the DOCUMENT level so it survives Keep re-rendering the
+  // button. The whole pointer sequence is swallowed, and pointerdown/mousedown
+  // are also preventDefault'd: their default action moves focus, and letting
+  // focus leave the note made Keep re-render the toolbar so "More" collapsed to
+  // 0x0 and the delete could not fire.
+  // -------------------------------------------------------------------------
+  function hijacked(e) {
+    var el = e.target && e.target.closest && e.target.closest(ARCHIVE_SEL);
+    if (!el) return null;
+    var bar = el.closest('div[role="toolbar"][' + HOST + ']');
+    return bar ? bar : null;
+  }
+
+  ['pointerdown', 'mousedown'].forEach(function (t) {
+    document.addEventListener(t, function (e) {
+      if (hijacked(e)) { e.preventDefault(); e.stopPropagation(); }
+    }, true);
+  });
+  ['pointerup', 'mouseup', 'touchstart', 'focusin'].forEach(function (t) {
+    document.addEventListener(t, function (e) {
+      if (hijacked(e)) e.stopPropagation();
+    }, true);
+  });
+  document.addEventListener('click', function (e) {
+    var bar = hijacked(e);
+    if (!bar) return;
+    e.preventDefault();
+    e.stopPropagation();
+    startDelete(bar);
+  }, true);
+
+  // -------------------------------------------------------------------------
+  // Sweep: only marks toolbars. No nodes are added or moved, which is why there
+  // is nothing left to flicker.
+  // -------------------------------------------------------------------------
+  function inTrashView() { return /(^|#|\/)trash\b/i.test(location.hash || ''); }
+
+  function isTarget(bar) {
+    if (bar.getBoundingClientRect().width <= 0) return false;   // 0x0 template toolbars
+    if (!bar.querySelector(ARCHIVE_SEL)) return false;
+    var more = bar.querySelector('[aria-label="More"]');
+    return !!more && more.getBoundingClientRect().width > 0;    // must be pressable
+  }
+
+  function sweep() {
+    var bars = document.querySelectorAll('div[role="toolbar"]');
+    var trash = inTrashView();
+    for (var i = 0; i < bars.length; i++) {
+      var bar = bars[i];
+      if (trash || !isTarget(bar)) {
+        if (bar.hasAttribute(HOST)) { bar.removeAttribute(HOST); bar.removeAttribute(ICO); }
+        continue;
+      }
+      if (!bar.hasAttribute(HOST)) bar.setAttribute(HOST, '1');
+      applyIcon(bar);
+
+      // Relabel so the tooltip and screen readers say what it now does. Keep
+      // resets this on re-render; the icon and the click handler key off
+      // ARCHIVE_SEL, which matches both spellings, so behaviour never lapses.
+      var a = bar.querySelector('[aria-label="Archive"]');
+      if (a) {
+        a.setAttribute(DONE, '1');
+        a.setAttribute('aria-label', 'Delete note');
+        if (a.hasAttribute('data-tooltip-text')) a.setAttribute('data-tooltip-text', 'Delete note');
+      }
+    }
+  }
+
+  // setTimeout, not requestAnimationFrame: rAF does not run in a hidden tab,
+  // and Keep keeps mutating the DOM as notes sync from other devices.
+  var pending = null;
+  function schedule() {
+    if (pending) return;
+    pending = setTimeout(function () { pending = null; sweep(); }, SWEEP_MS);
+  }
+
+  // childList only. Watching attributes would see our own marking.
+  new MutationObserver(schedule).observe(document.documentElement, { childList: true, subtree: true });
+  window.addEventListener('hashchange', schedule);
+  schedule();
+})();

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Archive, Download, Pin, Search } from "lucide-react";
 import { makeBookmarklet, type LiveFormat } from "@/lib/keep/bookmarklet";
 import { notesToMarkdownZip } from "@/lib/keep/bundle";
@@ -8,13 +8,33 @@ import { notesFromNamedBytes, parsePaste } from "@/lib/keep/read";
 import { sampleNotes } from "@/lib/keep/sample";
 import { displayTitle, notePlain, type KeepNote } from "@/lib/keep/types";
 
-const LIVE: { id: LiveFormat; label: string }[] = [
-  { id: "enex", label: "Evernote" },
-  { id: "md", label: "Markdown" },
-  { id: "json", label: "JSON" },
-  { id: "csv", label: "CSV" },
-  { id: "txt", label: "Text" },
+const LIVE: { id: LiveFormat; label: string; file: string }[] = [
+  { id: "enex", label: "Evernote", file: "an Evernote file (.enex)" },
+  { id: "md", label: "Markdown", file: "a Markdown file (.md)" },
+  { id: "json", label: "JSON", file: "a JSON file" },
+  { id: "csv", label: "CSV", file: "a CSV file" },
+  { id: "txt", label: "Text", file: "a plain text file" },
 ];
+
+function BookmarkLink({ href, label, onClickHere }: { href: string; label: string; onClickHere: () => void }) {
+  const slotRef = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    const slot = slotRef.current;
+    if (!slot) return;
+    const link = document.createElement("a");
+    link.setAttribute("href", href);
+    link.draggable = true;
+    link.textContent = label;
+    link.className = "inline-flex h-11 cursor-grab items-center rounded-lg bg-accent px-4 text-sm font-medium text-accent-fg";
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+      onClickHere();
+    });
+    slot.replaceChildren(link);
+    return () => slot.replaceChildren();
+  }, [href, label, onClickHere]);
+  return <span ref={slotRef} />;
+}
 
 function downloadBlob(filename: string, blob: Blob) {
   const url = URL.createObjectURL(blob);
@@ -48,8 +68,11 @@ export function KeepApp() {
   const [copied, setCopied] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const scriptRef = useRef<HTMLTextAreaElement>(null);
+  const [dragHint, setDragHint] = useState("");
 
   const bookmark = useMemo(() => makeBookmarklet(format), [format]);
+  const chosenFile = LIVE.find((item) => item.id === format)?.file ?? "an Evernote file (.enex)";
 
   function adopt(next: KeepNote[], source: "sample" | "paste" | "files", nextWarnings: string[]) {
     setNotes(next);
@@ -123,13 +146,16 @@ export function KeepApp() {
     try {
       await navigator.clipboard.writeText(bookmark);
       setCopied(true);
+      setDragHint("");
       setWarnings((current) => current.filter((warning) => !warning.startsWith("Clipboard is blocked")));
+      scriptRef.current?.focus();
+      scriptRef.current?.select();
     } catch {
       setCopied(false);
+      scriptRef.current?.focus();
+      scriptRef.current?.select();
       setWarnings([
-        window.matchMedia("(hover: hover)").matches
-          ? "Clipboard is blocked. Drag Keep for Real onto the bookmarks bar instead."
-          : "Clipboard is blocked. Press and hold the address below, then copy it.",
+        "Clipboard is blocked. The script below is selected. Press Ctrl+C, or Command+C on a Mac.",
       ]);
     }
   }
@@ -163,9 +189,9 @@ export function KeepApp() {
         <p className="mt-2 max-w-2xl text-muted">You only need to do one of these. The first two make a bookmark. A bookmark is a saved link in your browser.</p>
         <ul className="mt-4 grid gap-3 sm:grid-cols-2">
           <li className="rounded-2xl bg-paper p-4">
-            <p className="font-medium">Computer: drag the button</p>
+            <p className="font-medium">Computer: drag the link</p>
             <p className="mt-1 text-sm text-muted">
-              Best if you are on a laptop or desktop. Drag Keep for Real onto the bookmarks bar, open Google Keep, and click it. It opens every note so text cut off on the card is saved. Pictures are not.
+              Drag the Keep for Real link onto the bookmarks bar. The Evernote, Markdown, JSON, CSV, and Text buttons only choose the file type. They are not the bookmark.
             </p>
           </li>
           <li className="rounded-2xl bg-paper p-4">
@@ -190,21 +216,43 @@ export function KeepApp() {
       </section>
 
       <section className="mt-4 rounded-3xl bg-card p-4 shadow-border sm:p-6">
-        <h2 className="text-2xl font-medium">On a computer, drag the button</h2>
+        <h2 className="text-2xl font-medium">Save the bookmark</h2>
         <p className="mt-2 max-w-2xl text-muted">
-          The bookmarks bar is the row of links under the address field. If you do not see it, press Ctrl+Shift+B. On a Mac, press Command+Shift+B. In Safari, use the View menu and choose Show Favorites Bar.
+          Drag the link below onto the bookmarks bar. That bar is the row under the address field. Show it with Ctrl+Shift+B, or Command+Shift+B on a Mac. In Safari, use View, then Show Favorites Bar.
         </p>
-        <div className="mt-4 flex flex-wrap gap-2" role="group" aria-label="Bookmark format">
+        <p className="mt-4 text-sm font-medium text-ink">1. Drag this link</p>
+        <div className="mt-2 flex flex-wrap items-center gap-3">
+          <BookmarkLink
+            href={bookmark}
+            label={`Keep for Real · ${LIVE.find((item) => item.id === format)?.label ?? "Evernote"}`}
+            onClickHere={() =>
+              setDragHint("Clicking it on this page does nothing. Drag the link to the bookmarks bar, or copy the script below.")
+            }
+          />
+          <button
+            type="button"
+            onClick={() => void copyBookmark()}
+            className="h-11 rounded-lg bg-ink px-4 text-sm font-medium text-paper"
+          >
+            {copied ? "Script copied" : "Copy the script"}
+          </button>
+        </div>
+        {dragHint ? <p className="mt-2 text-sm text-ink">{dragHint}</p> : null}
+        <p className="mt-4 text-sm font-medium text-ink">2. Pick the file type first, if you want</p>
+        <p className="mt-1 text-sm text-muted">These are not the bookmark. Clicking one changes the link above. It will download {chosenFile}.</p>
+        <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label="Bookmark file type">
           {LIVE.map((item) => {
             const on = format === item.id;
             return (
               <button
                 key={item.id}
                 type="button"
+                draggable={false}
                 aria-pressed={on}
                 onClick={() => {
                   setFormat(item.id);
                   setCopied(false);
+                  setDragHint(`The link now saves ${item.file}. Drag that link again if you already saved an older one.`);
                 }}
                 className={
                   on
@@ -217,61 +265,41 @@ export function KeepApp() {
             );
           })}
         </div>
-        <p className="mt-2 text-sm text-muted">
-          Choose Evernote unless you already know you want Markdown, JSON, CSV, or text. You can download the other kinds later from this page.
-        </p>
-        <ol className="mt-5 grid gap-4 sm:grid-cols-3">
+        <ol className="mt-5 grid gap-4 sm:grid-cols-2">
           <li className="rounded-2xl bg-paper p-4">
-            <p className="text-sm font-medium text-muted">1</p>
-            <p className="mt-2 font-medium">Drag this to your bookmarks bar</p>
-            <a
-              href={bookmark}
-              draggable
-              onClick={(event) => event.preventDefault()}
-              className="mt-3 inline-flex h-11 items-center rounded-lg bg-accent px-4 text-sm font-medium text-accent-fg"
-            >
-              Keep for Real
-            </a>
-            <p className="mt-2 text-sm text-muted">Press and hold the button, then drop it on the bar. Do not click it on this page.</p>
-          </li>
-          <li className="rounded-2xl bg-paper p-4">
-            <p className="text-sm font-medium text-muted">2</p>
+            <p className="text-sm font-medium text-muted">3</p>
             <p className="mt-2 font-medium">Open Google Keep</p>
             <p className="mt-1 text-sm text-muted">
-              Go to keep.google.com and sign in. Stay on the list of notes. Do not open a single note first.
+              Go to keep.google.com and sign in. Stay on the list of notes. Do not open one note first.
             </p>
           </li>
           <li className="rounded-2xl bg-paper p-4">
-            <p className="text-sm font-medium text-muted">3</p>
-            <p className="mt-2 font-medium">Click the bookmark</p>
+            <p className="text-sm font-medium text-muted">4</p>
+            <p className="mt-2 font-medium">Click the bookmark there</p>
             <p className="mt-1 text-sm text-muted">
-              Leave that tab alone until a file downloads. It opens each note to get the full text. For archived notes, open Archive in Keep and click the bookmark again. Photos stay in Keep.
+              Leave that tab alone until a file downloads. For archived notes, open Archive and click the bookmark again. Photos stay in Keep.
             </p>
           </li>
         </ol>
-        <button type="button" onClick={() => void copyBookmark()} className="mt-4 h-11 text-sm font-medium text-accent">
-          {copied ? "Bookmark copied" : "Copy bookmark address"}
-        </button>
-        <div className="mt-4 max-w-2xl text-sm text-muted">
-          <p className="font-medium text-ink">Cannot drag? Use the button above, then:</p>
-          <ol className="mt-2 list-decimal space-y-2 pl-5">
-            <li>Bookmark this page. On a computer, click the star in the address bar. On a phone, tap Share, then Add Bookmark.</li>
-            <li>Open your bookmarks and edit the one you just saved. Name it Keep for Real if you want.</li>
-            <li>Delete the address and paste. It must start with javascript: including the colon. If those letters were cut off, type them at the start.</li>
-            <li>Open keep.google.com, stay on the notes list, and tap the bookmark. Leave the tab alone until the file downloads.</li>
-          </ol>
-          <p className="mt-2">Safari on iPhone can run this. Chrome on Android cannot. Paste the notes, or use a Takeout zip, instead.</p>
-        </div>
-        {warnings.some((warning) => warning.startsWith("Clipboard is blocked")) ? (
+        <label className="mt-4 block text-sm text-muted">
+          <span className="font-medium text-ink">If the link will not drag, paste this script</span>
+          <span className="mt-1 block">
+            Click Copy the script, or click this box and copy it all. Then bookmark any page, edit that bookmark, delete its address, and paste. The address must start with javascript:
+          </span>
           <textarea
+            ref={scriptRef}
             readOnly
             value={bookmark}
-            rows={4}
+            rows={5}
+            spellCheck={false}
             onFocus={(event) => event.currentTarget.select()}
-            aria-label="Bookmark address"
-            className="mt-3 w-full rounded-lg border border-line bg-paper px-3 py-3 text-sm text-ink"
+            aria-label="Bookmark script"
+            className="mt-2 w-full rounded-lg border border-line bg-paper px-3 py-3 text-sm text-ink"
           />
-        ) : null}
+        </label>
+        <p className="mt-2 max-w-2xl text-sm text-muted">
+          Delete any old bookmark that says React has blocked a javascript URL. Safari on iPhone can run the pasted script. Chrome on Android cannot. Paste the notes, or use a Takeout zip, instead.
+        </p>
       </section>
 
       <div className="mt-4 grid gap-4 lg:grid-cols-2">
